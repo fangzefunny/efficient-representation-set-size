@@ -1,0 +1,24 @@
+# remove some sytem forlders and files
+.vscode/
+*.vscode
+*.ipynb_checkpoints
+.DS_Store
+*/.DS_Store
+.DS_Store?
+__pycache__/
+**/__pycache__
+
+# ignore files and folders
+data/ 
+fits/
+figures/
+simulations/
+visualize/
+analyses/
+backup/
+mri_config/
+torchntk/
+mri_src/
+hpclog/
+hpc_run.sh
+*.log
