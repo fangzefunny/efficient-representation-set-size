@@ -5,6 +5,7 @@ import pandas as pd
 
 # set up path 
 path = os.path.dirname(os.path.abspath(__file__))
+if not os.path.exists( f'{path}/data'): os.makedirs( f'{path}/data')
 
 # utils
 def clean_data(data):

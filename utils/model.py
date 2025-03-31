@@ -315,6 +315,13 @@ def loss_capacity(theta, c_tar, nS):
         c_hat = (p_x*p_y1x*(np.log(p_y1x+1e-16)-np.log(p_y.T+1e-16))).sum()
         return (c_tar-c_hat)**2
 
+@lru_cache(maxsize=None)
+def theta_given_C(c_tar, nS):
+        theta0  = np.random.rand()*3
+        res = minimize(loss_capacity, x0=theta0, args=(c_tar, nS))
+        theta = res.x[0]
+        return theta
+
 class ecPG(base_agent):
     '''Efficient coding policy gradient (analytical)
 
@@ -340,7 +347,7 @@ class ecPG(base_agent):
     name     = 'ECPG'
     p_names  = ['alpha_psi', 'alpha_rho', 'lmbda', 'capacity']  
     p_bnds   = [(-1000, 1000)]*len(p_names)
-    p_pbnds  = [(-2, 3), (-2, 3), (-6, 1.5), (.8, 1.3)]
+    p_pbnds  = [(-2, 3), (-2, 3), (-6, 1.5), (-.22, .26)]
     p_poi    = p_names
     p_priors = [halfnorm(0, 40)]*len(p_names)
     p_trans  = [lambda x: clip_exp(x)]*len(p_names)
@@ -353,25 +360,22 @@ class ecPG(base_agent):
     size     = 125
     alpha    = 1
 
+    @staticmethod
+    def link_params(params):
+        return [f(p) for f, p in zip(ecPG.p_links, params)]
+
     def load_params(self, params):
         params = [f(p) for f, p in zip(self.p_trans, params)]
         self.alpha_psi  = params[0]
         self.alpha_rho  = params[1]
         self.lmbda      = params[2]
         self.C          = params[3]
-        self.b          = .5
-
-    @staticmethod
-    def theta_given_C(c_tar, nS):
-        theta0  = np.random.rand()*3
-        res = minimize(loss_capacity, x0=theta0, args=(c_tar, nS))
-        theta = res.x[0]
-        return theta
+        self.b          = 1/3
 
     def _init_agent(self):
         self.nS = int(self.nS)
         self.nZ = self.nS
-        theta = self.theta_given_C(self.C, self.nS)
+        theta = deepcopy(self.theta_given_C(self.C, self.nS))
         self.theta = np.eye(self.nS)*theta
         self.phi   = np.zeros([self.nS, self.nA]) 
         self._learn_pZ()
