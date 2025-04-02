@@ -109,7 +109,9 @@ class wrapper:
         Because it is independent across experiment.
         '''
         # init subject and load block type
-        block_type = block_data.loc[0, 'block_type']
+        block_type_lst = block_data['block_type'].unique()
+        assert len(block_type_lst) == 1, 'Only one block type is allowed'
+        block_type = block_type_lst[0]
         env  = self.env_fn(block_type)
         subj = self.agent(env, params)
         ll   = 0
@@ -375,7 +377,7 @@ class ecPG(base_agent):
     def _init_agent(self):
         self.nS = int(self.nS)
         self.nZ = self.nS
-        theta = deepcopy(self.theta_given_C(self.C, self.nS))
+        theta = deepcopy(theta_given_C(self.C, self.nS))
         self.theta = np.eye(self.nS)*theta
         self.phi   = np.zeros([self.nS, self.nA]) 
         self._learn_pZ()
@@ -452,3 +454,252 @@ class ecPG(base_agent):
             rho += p_A1Z
         return rho 
     
+class ECRL(ecPG):
+    name     = 'ECRL'
+    p_names  = ['alpha_psi', 'alpha_rho', 'lmbda', 'capacity', 'alpha_w']  
+    p_bnds   = [(-1000, 1000)]*len(p_names)
+    p_pbnds  = [(-2, 3), (-2, 3), (-6, 1.5), (-.22, .7), (-3, 1)]
+    p_poi    = p_names
+    p_priors = [halfnorm(0, 40)]*3+\
+                [uniform(0, 1.8)]+\
+                [halfnorm(0, 40)]
+    p_trans  = [lambda x: clip_exp(x)]*3+\
+                [lambda x: 1.8/(1+clip_exp(-x))]+\
+                [lambda x: clip_exp(x)]
+    p_links  = [lambda x: np.log(x+eps_)]*3+\
+                [lambda x: np.log(x+eps_)-np.log(1.8-x+eps_)]+\
+                [lambda x: np.log(x+eps_)]
+    n_params = len(p_names)
+    voi      = ['i_SZ']
+    insights = ['enc', 'dec', 'pol']
+    color    = viz.Red
+    marker   = '^'
+    size     = 125
+    alpha    = 1
+
+    @staticmethod
+    def link_params(params):
+        return [f(p) for f, p in zip(ECRL.p_links, params)]
+
+    def load_params(self, params):
+        params = [f(p) for f, p in zip(self.p_trans, params)]
+        self.alpha_psi  = params[0]
+        self.alpha_rho  = params[1]
+        self.lmbda      = params[2]
+        self.C          = params[3]
+        self.alpha_w    = params[4]
+        self.b          = 1/self.nA
+        # initialize the w = .9, since
+        # w = 1/(1+exp(-xi)), 
+        # we have xi = log(.9) - log(.1)
+        self.xi         = np.log(.9)-np.log(.1) 
+        self.w          = 1/(1+clip_exp(-self.xi))
+        
+    def _learn_enc_dec(self):
+        # get data 
+        s, a_ava, a, r = self.mem.sample('s', 'a_ava', 'a', 'r')
+       
+        # prediction 
+        f     = np.eye(self.nS)[s].reshape([1, -1])
+        p_Z1s = softmax(f@self.theta, axis=1)
+        m_A   = mask_fn(self.nA, a_ava)
+        p_A1Z = softmax(self.phi-(1-m_A)*max_, axis=1)
+        p_a1Z = p_A1Z[:, [a]]
+        u = np.array([r - self.b])[:, np.newaxis] 
+        
+        # backward
+        # note: in derviation we wrote 
+        #          log_dif = log p(Z|S) - log p(Z) - 1
+        # However, substracting the constant 1 will not affect the 
+        # numerical value of gradeint, due to the normalization 
+        # term in calculating gTheta.
+        log_dif = np.log(p_Z1s+eps_)-np.log(self.p_Z.T+eps_)  
+        sTheta = (self.w*u*p_a1Z.T/(self.lmbda+eps_) - log_dif)
+        gTheta = -f.T@(p_Z1s*(np.ones([1, self.nZ])*
+                    sTheta - p_Z1s@sTheta.T))
+       
+        # calculate the gradient of phi 
+        sPhi = self.w*u*p_Z1s.T
+        gPhi = -p_a1Z*(np.eye(self.nA)[[a]] - p_A1Z)*sPhi
+
+        # calculate the gradient of xi 
+        gXi = -((p_Z1s@p_a1Z).sum() - 1/self.nA)*(r - self.b)*self.w*(1-self.w)
+
+        # update phi, the parameter of decoder 
+        self.theta -= self.alpha_psi * gTheta
+        self.phi   -= self.alpha_rho * gPhi 
+        self.xi    -= self.alpha_w * gXi
+
+        # update w, the weight for exploration 
+        self.w = 1/(1+clip_exp(-self.xi))
+
+class CURL(ECRL):
+    name     = 'CURL'
+    p_names  = ['alpha_rho', 'alpha_w']  
+    p_bnds   = [(-1000, 1000)]*len(p_names)
+    p_pbnds  = [(-2, 3), (-3, 1)]
+    p_poi    = p_names
+    p_priors = [halfnorm(0, 40)]*2
+    p_trans  = [lambda x: clip_exp(x)]*2
+    p_links  = [lambda x: np.log(x+eps_)]*2
+    n_params = len(p_names)
+    voi      = [] 
+
+    @staticmethod
+    def link_params(params):
+        return [f(p) for f, p in zip(CURL.p_links, params)]
+
+    def load_params(self, params):
+        params = [f(p) for f, p in zip(self.p_trans, params)]
+        self.alpha_rho  = params[0]
+        self.alpha_w    = params[1]
+        self.b          = 1/self.nA
+        self.xi         = np.log(.9)-np.log(.1) 
+        self.w          = 1/(1+clip_exp(-self.xi))
+
+    def _init_agent(self):
+        self.nS = int(self.nS)
+        self.nZ = self.nS
+        theta = 100*np.eye(self.nS)
+        self.theta = np.eye(self.nS)*theta
+        self.phi   = np.zeros([self.nS, self.nA]) 
+        self._learn_pZ()
+
+    def _learn_enc_dec(self):
+        # get data 
+        s, a_ava, a, r = self.mem.sample('s', 'a_ava', 'a', 'r')
+       
+        # prediction 
+        f     = np.eye(self.nS)[s].reshape([1, -1])
+        p_Z1s = softmax(f@self.theta, axis=1)
+        m_A   = mask_fn(self.nA, a_ava)
+        p_A1Z = softmax(self.phi-(1-m_A)*max_, axis=1)
+        p_a1Z = p_A1Z[:, [a]]
+        u = np.array([r - self.b])[:, np.newaxis] 
+       
+        # calculate the gradient of phi 
+        sPhi = self.w*u*p_Z1s.T
+        gPhi = -p_a1Z*(np.eye(self.nA)[[a]] - p_A1Z)*sPhi
+
+        # calculate the gradient of xi 
+        gXi = -((p_Z1s@p_a1Z).sum() - 1/self.nA)*(r - self.b)*self.w*(1-self.w)
+
+        # update phi, the parameter of decoder 
+        self.phi   -= self.alpha_rho * gPhi 
+        self.xi    -= self.alpha_w * gXi
+
+        # update w, the weight for exploration 
+        self.w = 1/(1+clip_exp(-self.xi))
+
+class CCRL(ECRL):
+    '''Capacity-constrained RL'''
+    name     = 'CCRL'
+    p_names  = ['alpha_rho', 'alpha_w', 'C']  
+    p_bnds   = [(-1000, 1000)]*len(p_names)
+    p_pbnds  = [(-2, 3), (-3, 1), (-.22, .7)]
+    p_poi    = p_names
+    p_priors = [halfnorm(0, 40)]*2+\
+                [uniform(0, 1.8)]
+    p_trans  = [lambda x: clip_exp(x)]*2+\
+                [lambda x: 1.8/(1+clip_exp(-x))]
+    p_links  = [lambda x: np.log(x+eps_)]*2+\
+                [lambda x: np.log(x+eps_)-np.log(1.8-x+eps_)]
+    n_params = len(p_names)
+    voi      = [] 
+
+    @staticmethod
+    def link_params(params):
+        return [f(p) for f, p in zip(CCRL.p_links, params)]
+
+    def load_params(self, params):
+        params = [f(p) for f, p in zip(self.p_trans, params)]
+        self.alpha_rho  = params[0]
+        self.C          = params[1]
+        self.alpha_w    = params[2]
+        self.b          = 1/self.nA
+        # initialize the w = .9, since
+        # w = 1/(1+exp(-xi)), 
+        # we have xi = log(.9) - log(.1)
+        self.xi         = np.log(.9)-np.log(.1) 
+        self.w          = 1/(1+clip_exp(-self.xi))
+
+    def _learn_enc_dec(self): CURL._learn_enc_dec(self)
+
+# --------- RLWM as a baseline --------- #
+
+class RLWM(base_agent):
+    name     = 'RLWM'
+    p_names  = ['beta_rl', 'alpha_rl', 'eps', 'C', 'w0', 'beta_wm']  
+    p_bnds   = [(-1000, 1000)]*len(p_names)
+    p_pbnds  = [(1, 2), (-2, 2), (-2, 2), (1, 2), (-2, 2), (1, 2)]
+    p_poi    = p_names
+    p_priors = [halfnorm(0, 40), uniform(0, 1), uniform(0, 1), 
+                halfnorm(0, 40), uniform(0, 1), halfnorm(0, 40)]
+    p_trans  = [lambda x: clip_exp(x),
+                lambda x: 1/(1+clip_exp(-x)),
+                lambda x: 1/(1+clip_exp(-x)),
+                lambda x: clip_exp(x),
+                lambda x: 1/(1+clip_exp(-x)),
+                lambda x: clip_exp(x)]
+    p_links  = [lambda x: np.log(x+eps_),
+                lambda x: np.log(x+eps_)-np.log(1-x+eps_),
+                lambda x: np.log(x+eps_)-np.log(1-x+eps_),
+                lambda x: np.log(x+eps_),
+                lambda x: np.log(x+eps_)-np.log(1-x+eps_),
+                lambda x: np.log(x+eps_)]
+    n_params = len(p_names)
+    voi      = [] 
+
+    @staticmethod
+    def link_params(params):
+        return [f(p) for f, p in zip(RLWM.p_links, params)]
+
+    def load_params(self, params):
+        params = [f(p) for f, p in zip(self.p_trans, params)]
+        self.beta_rl  = params[0]
+        self.alpha_rl = params[1]
+        self.eps      = params[2]
+        self.C        = params[3]
+        self.w        = params[4]
+        self.beta_wm  = params[5]
+
+    def _init_agent(self):
+        # initialize the Q table for WM
+        self.qWM_SA = np.ones([self.nS, self.nA]) / self.nA
+        # initialize the Q table for RL
+        self.qRL_SA = np.ones([self.nS, self.nA]) / self.nA
+        # initialize the weight for WM
+        self.w *= np.min([1, self.C / self.nS])
+        # initialize the weight for RL
+        self.ws = np.ones([self.nS]) * self.w
+
+    def learn(self):
+        # get data 
+        s, a, r = self.mem.sample('s', 'a', 'r')
+
+        # get the Q values
+        qWM_hat = self.qWM_SA[s, a]
+        qRL_hat = self.qRL_SA[s, a]
+
+        # decay of the working memory to chance level
+        self.qWM_SA[s, a] += self.eps*(1/self.nA - self.qWM_SA[s, a])
+        # update working memory and create working memory policy
+        # get q_wm_t+1
+        self.qWM_SA[s, a] += 1 * (r - qWM_hat)
+
+
+        # update the RL critic, and wokring memory
+        # get q_rl_t+1 
+        self.qRL_SA[s, a] += self.alpha_rl * (r - qRL_hat)
+        
+        # update w: get w_t+1
+        wc =  np.min([1, self.C/self.nS])
+        p_RL = qRL_hat**r*(1-qRL_hat)**(1-r)
+        p_WM = wc * qWM_hat**r*(1-qWM_hat)**(1-r) + (1-wc)/self.nA   
+        self.ws[s] = (self.ws[s]*p_WM) / (self.ws[s]*p_WM + (1-self.ws[s])*p_RL)
+
+    def policy(self, **kwargs):
+        s = kwargs['s']
+        pi_RL = softmax(self.beta_rl * self.qRL_SA[s,:])
+        pi_WM = softmax(self.beta_wm * self.qWM_SA[s,:])
+        return self.ws[s]*pi_WM + (1 - self.ws[s])*pi_RL

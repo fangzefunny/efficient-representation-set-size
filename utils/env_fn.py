@@ -44,7 +44,7 @@ class setsize_task(base_task):
         self._init_S(block_type)
     
     def _init_S(self, block_type):
-        self.nS = block_type
+        self.nS = int(block_type)
         
     @staticmethod
     def eval_fn(row, subj):

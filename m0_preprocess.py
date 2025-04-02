@@ -70,42 +70,83 @@ def pre_process_12():
     # save the preprocessed data
     human_data['stage'] = 'train'
     human_data['a_ava'] = '[0,1,2]'
-    human_data.to_csv( f'{path}/data/collins_12-human.csv')
    
     # split data into subject data and save for fit 
-    coi = ['sub_id','block_id', 'block_type', 's', 'a', 'r', 
+    coi = ['sub_id', 'trial', 'block_id', 'block_type', 's', 'a', 'r', 
            'repetitions', 'cor_a', 'stage', 'a_ava']
     sub_lst = human_data['sub_id'].unique()
     data_for_fit = {}
+    for_analysis = []
     for sub_id in sub_lst:
         sub_data = human_data.query(f'sub_id=="{sub_id}"')
         block_lst = sub_data['block_id'].unique()
         sub_data_for_fit = {}
         for block_id in block_lst:
-            block_data = sub_data.query(f'block_id=={block_id}')
+            block_data = sub_data.query(f'block_id=={block_id}').reset_index(drop=True)
             block_data = block_data.loc[ :, coi]
             sub_data_for_fit[block_id] = block_data
+            for_analysis.append(block_data)
         data_for_fit[sub_id] = sub_data_for_fit
-    with open( f'{path}/data/collins_12.pkl', 'wb')as handle:
+    # save the for analysis data
+    for_analysis = pd.concat(for_analysis)
+    for_analysis.to_csv(f'{path}/data/setsize-collins12-human.csv')
+    # save the preprocessed data
+    with open(f'{path}/data/setsize-collins12.pkl', 'wb')as handle:
         pickle.dump(data_for_fit, handle)
 
 def pre_process_14():
     
     # load data 
-    human_data = pd.read_csv( 'data/collins_14_orig.csv')
+    human_data = pd.read_csv( 'raw_data/collins_14_orig.csv')
     human_data = clean_data( human_data)
     human_data = remake_cols( human_data)
-    human_data = human_data[ human_data.expCondi==0]
-    human_data.reset_index(drop=True, inplace=True)
-    block_data = split_data( human_data, mode='block')
+    human_data = human_data.reset_index(drop=True)
+     # rename the columns 
+    human_data.rename(
+        columns = {
+            'setSize': 'block_type', 
+            'state': 's', 
+            'action': 'a', 
+            'reward': 'r', 
+            'iter': 'repetitions', 
+            'correctAct': 'cor_a',
+            'block': 'block_id',
+            'subject': 'sub_id',
+            'expCondi': 'group',
+        }, inplace = True)
+    human_data['sub_id'] = human_data['sub_id'].apply(lambda x: f'sub-{int(x)}')
+    human_data['group'] = human_data['group'].apply(lambda x: 'HC' if x==0 else 'SZ')
+    for group in ['HC', 'SZ']:
+        n = human_data.query(f'group=="{group}"')["sub_id"].unique().__len__()
+        print(f'{group}: {n}')
 
-    with open( f'{path}/data/collins_14.pkl', 'wb')as handle:
-        pickle.dump( block_data, handle)
+    # save the preprocessed data
+    human_data['stage'] = 'train'
+    human_data['a_ava'] = '[0,1,2]'
+    human_data.to_csv( f'{path}/data/setsize-collins14-human.csv')
 
-    # split data into subject data
-    subject_data = split_data( human_data, mode='subject')
-    with open( f'{path}/data/collins_14_subject.pkl', 'wb')as handle:
-        pickle.dump( subject_data, handle)
+   # split data into subject data and save for fit 
+    coi = ['sub_id', 'trial', 'block_id', 'block_type', 's', 'a', 'r', 
+           'repetitions', 'cor_a', 'stage', 'a_ava', 'group']
+    sub_lst = human_data['sub_id'].unique()
+    data_for_fit = {}
+    for_analysis = []
+    for sub_id in sub_lst:
+        sub_data = human_data.query(f'sub_id=="{sub_id}"')
+        block_lst = sub_data['block_id'].unique()
+        sub_data_for_fit = {}
+        for block_id in block_lst:
+            block_data = sub_data.query(f'block_id=={block_id}').reset_index(drop=True)
+            block_data = block_data.loc[:, coi]
+            sub_data_for_fit[block_id] = block_data
+            for_analysis.append(block_data)
+        data_for_fit[sub_id] = sub_data_for_fit
+     # save the for analysis data
+    for_analysis = pd.concat(for_analysis)
+    for_analysis.to_csv(f'{path}/data/setsize-collins14-human.csv')
+    # save the preprocessed data
+    with open(f'{path}/data/setsize-collins14.pkl', 'wb')as handle:
+        pickle.dump(data_for_fit, handle)
     
 
 if __name__ == '__main__':
@@ -114,7 +155,7 @@ if __name__ == '__main__':
     pre_process_12()
 
     # preprocess collins 14 data 
-    #pre_process_14()
+    pre_process_14()
     
 
     
