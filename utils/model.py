@@ -27,12 +27,11 @@ def MI(p_X, p_Y1X, p_Y):
     return (p_X*p_Y1X*(np.log(p_Y1X+eps_)-np.log(p_Y.T+eps_))).sum()
 
 def clip_exp(x):
+    '''Clip the exponential function
+
+    '''
     x = np.clip(x, a_min=-max_, a_max=50)
     return np.exp(x) 
-
-def step(w, lr):
-    w.data -= lr*w.grad.data
-    w.grad.data.zero_()
 
 # ------------------------------#
 #         Agent wrapper         #
@@ -310,69 +309,94 @@ class human:
    name  = 'Human'
    color = viz.Blue 
 
+# ------------------------------#
+#       Normative models        #
+# ------------------------------#
+
 def loss_capacity(theta, c_tar, nS):
-        p_x = np.ones([nS, 1])/nS
-        p_y1x = softmax(theta*np.eye(nS), axis=1)
-        p_y = p_y1x@p_x
-        c_hat = (p_x*p_y1x*(np.log(p_y1x+1e-16)-np.log(p_y.T+1e-16))).sum()
-        return (c_tar-c_hat)**2
+    '''Loss function for theta given capacity
+        (C - I(S;Z))**2
+    '''
+    p_x = np.ones([nS, 1])/nS
+    p_y1x = softmax(theta*np.eye(nS), axis=1)
+    p_y = p_y1x@p_x
+    c_hat = (p_x*p_y1x*(np.log(p_y1x+1e-16)-np.log(p_y.T+1e-16))).sum()
+    return (c_tar-c_hat)**2
 
 @lru_cache(maxsize=None)
 def theta_given_C(c_tar, nS):
-        theta0  = np.random.rand()*3
-        res = minimize(loss_capacity, x0=theta0, args=(c_tar, nS))
-        theta = res.x[0]
-        return theta
+    '''Find theta given capacity
 
-class ecPG(base_agent):
-    '''Efficient coding policy gradient (analytical)
-
-    We create two mathematical equivalent versions for ECPG, each
-    aim at tackling different numerical problems. 
-    The only difference exist in calculating sTheta.
-
-    The analytical version, we do:
-        sTheta = (u*p_a1Z.T - self.lmbda*log_dif)
-    and in the fitting version, we do:
-        sTheta = (u*p_a1Z.T/(self.lmdba+eps_) - log_dif)
-
-    The analytical version is more consistent with the objective function.
-    It is easy to illustrate the model behaviors with varying
-    λ, because it will not divided by 0. 
-
-    However, this implementation causes high correlation
-    between parameters α_ψ and λ，bring difficulties in parameter
-    estimation. 
-
-    The same logics applied to fECPG.
+    Solve the following optimization problem:
+        min_{θ} (C - I(S;Z))**2
     '''
-    name     = 'ECPG'
-    p_names  = ['alpha_psi', 'alpha_rho', 'lmbda', 'capacity']  
+    theta0  = np.random.rand()*3
+    res = minimize(loss_capacity, x0=theta0, args=(c_tar, nS))
+    theta = res.x[0]
+    return theta
+
+class ecRL(base_agent):
+    '''Efficient coding Reinforcement Learning
+    '''
+    name     = 'ECRL'
+    p_names  = ['alpha_psi',    # alpha_psi ∈ (0, \infty)
+                'alpha_rho',    # alpha_rho ∈ (0, \infty)
+                'capacity',     # C         ∈ (0, 1.8) the capacity to encode 6 stimulus
+                'lmbda0',       # lmbda0    ∈ (0, 1) 
+                'alpha_lmbda']  # alpha_lmbda ∈ (0, \infty)
+    # the parameter of interest
+    p_poi    = p_names 
+    # the bounds of the parameters
     p_bnds   = [(-1000, 1000)]*len(p_names)
-    p_pbnds  = [(-2, 3), (-2, 3), (-6, 1.5), (-.22, .26)]
-    p_poi    = p_names
-    p_priors = [halfnorm(0, 40)]*len(p_names)
-    p_trans  = [lambda x: clip_exp(x)]*len(p_names)
-    p_links  = [lambda x: np.log(x+eps_)]*len(p_names)
+    # the possible bounds of the parameters
+    # used for parameter intialization 
+    p_pbnds  = [(-2, 3),       # alpha_psi ∈ (0.13, 20.39)
+                ( 1, 3),       # alpha_rho ∈ (2.72, 20.09)
+                ( 0, 1),       # capacity  ∈ (0.90,  1.32)
+                (-4.6, -1.4),  # lmbda0    ∈ (0.01,  0.20)
+                (-5, -3)]      # alpha_lmbda ∈ (0.007,  0.05)
+    # the priors of the parameters
+    p_priors = [halfnorm(0, 50)]*len(p_names)
+    # the reparameterized function for each parameters
+    p_trans  = [lambda x: clip_exp(x)]*2 \
+                + [lambda x: 1.8/(1+clip_exp(-x))] \
+                + [lambda x: 1/(1+clip_exp(-x))] \
+                + [lambda x: clip_exp(x)]
+    # the link function for each parameters
+    p_links  = [lambda x: np.log(x+eps_)]*2 \
+                + [lambda x: np.log(x+eps_)-np.log(1.8-x+eps_)] \
+                + [lambda x: np.log(x+eps_)-np.log(1-x+eps_)] \
+                + [lambda x: np.log(x+eps_)]
+    # the number of parameters
     n_params = len(p_names)
-    voi      = ['i_SZ']
+    # the value of interest (which can be record in the simulation)
+    voi      = ['i_SZ', 'lmbda', 'demand']
+    # the insights of the model (which can be obtained using hooks)
     insights = ['enc', 'dec', 'pol']
-    color    = viz.Red
+    color    = viz.green1
     marker   = '^'
     size     = 125
     alpha    = 1
 
     @staticmethod
     def link_params(params):
-        return [f(p) for f, p in zip(ecPG.p_links, params)]
+        return [f(p) for f, p in zip(ecRL.p_links, params)]
+    
+    @staticmethod
+    def trans_params(params):
+        return [f(p) for f, p in zip(ecRL.p_trans, params)]
 
     def load_params(self, params):
         params = [f(p) for f, p in zip(self.p_trans, params)]
         self.alpha_psi  = params[0]
         self.alpha_rho  = params[1]
-        self.lmbda      = params[2]
-        self.C          = params[3]
-        self.b          = 1/3
+        self.C          = params[2]
+        self.lmbda0     = params[3]
+        self.alpha_lmbda = params[4]
+        # initalize some variables
+        self.b          = 1/self.nA 
+        self.lmbda      = self.lmbda0
+        self.demand     = 0
 
     def _init_agent(self):
         self.nS = int(self.nS)
@@ -402,10 +426,22 @@ class ecPG(base_agent):
         self._learn_pZ()
 
     def _learn_enc_dec(self):
+        '''Update the parameters of the encoder and decoder
+
+        To address the dual optimziation problem:
+
+            min_{λ} max_{θ, φ} E[r-b] - λ(I(S;Z)-C)
+
+        we use the following update rules:
+
+            θ = θ - α_psi * g_theta
+            φ = φ - α_rho * g_phi
+            λ = λ + α_lambda * (I(S;Z)-C)
+        '''
         # get data 
         s, a_ava, a, r = self.mem.sample('s', 'a_ava', 'a', 'r')
        
-        # prediction 
+        # Forward: prediction 
         f     = np.eye(self.nS)[s].reshape([1, -1])
         p_Z1s = softmax(f@self.theta, axis=1)
         m_A   = mask_fn(self.nA, a_ava)
@@ -413,28 +449,35 @@ class ecPG(base_agent):
         p_a1Z = p_A1Z[:, [a]]
         u = np.array([r - self.b])[:, np.newaxis] 
         
-        # backward
-        # note: in derviation we wrote 
-        #          log_dif = log p(Z|S) - log p(Z) - 1
-        # However, substracting the constant 1 will not affect the 
-        # numerical value of gradeint, due to the normalization 
-        # term in calculating gTheta.
+        # Backward: gradient calculation 
+        # calculate the gradient of theta 
         log_dif = np.log(p_Z1s+eps_)-np.log(self.p_Z.T+eps_)  
-        sTheta = (u*p_a1Z.T/(self.lmbda+eps_) - log_dif)
+        sTheta = (u*p_a1Z.T - self.lmbda*log_dif)
         gTheta = -f.T@(p_Z1s*(np.ones([1, self.nZ])*
                     sTheta - p_Z1s@sTheta.T))
-       
+        # calculate the gradient of phi 
         sPhi = u*p_Z1s.T
         gPhi = -p_a1Z*(np.eye(self.nA)[[a]] - p_A1Z)*sPhi
+        # calculate the gradient of tradeoff 
+        p_Z1S = softmax(self.theta, axis=1)
+        mi = MI(self.p_S, p_Z1S, self.p_Z)
+        self.demand = mi - self.C
 
-        self.theta -= self.alpha_psi * gTheta
+        # Update the parameters
+        self.theta -= self.alpha_psi * np.clip(gTheta, -1, 1)
         self.phi   -= self.alpha_rho * gPhi
+        self.lmbda += self.alpha_lmbda * self.demand
+        self.lmbda = np.max([self.lmbda, eps_])
     
     # --------- some predictions ----------- #
         
     def get_i_SZ(self):
         psi_Z1S = softmax(self.F@self.theta, axis=1)
         return MI(self.p_S, psi_Z1S, self.p_Z)
+    
+    def get_lmbda(self): return self.lmbda
+    
+    def get_demand(self): return self.demand
     
     def get_i_ZA(self):
         rho_A1Z = softmax(self.phi, axis=1)
@@ -453,24 +496,30 @@ class ecPG(base_agent):
             p_A1Z  /= p_A1Z.sum(1, keepdims=True)
             rho += p_A1Z
         return rho 
-    
-class ECRL(ecPG):
+
+class ecRL0(ecRL):
+    '''Efficient Coding Reinforcement Learning
+
+    This is a special case of ecRL where alpha_lmbda = 0.
+    The model works well in this specific paradigm.
+    '''
     name     = 'ECRL'
-    p_names  = ['alpha_psi', 'alpha_rho', 'lmbda', 'capacity', 'alpha_w']  
+    p_names  = ['alpha_psi', 'alpha_rho', 'capacity', 'lmbda0']  
     p_bnds   = [(-1000, 1000)]*len(p_names)
-    p_pbnds  = [(-2, 3), (-2, 3), (-6, 1.5), (-.22, .7), (-3, 1)]
+    p_pbnds  = [(-2, 3),       # alpha_psi ∈ (0.13, 20.39) 
+                ( 1, 3),       # alpha_rho ∈ (2.72, 20.09)
+                ( 0, 1),       # capacity  ∈ (0.90,  1.32)
+                (-4.6, -1.4)]  # lmbda0    ∈ (0.01,  0.20)
     p_poi    = p_names
-    p_priors = [halfnorm(0, 40)]*3+\
-                [uniform(0, 1.8)]+\
-                [halfnorm(0, 40)]
-    p_trans  = [lambda x: clip_exp(x)]*3+\
-                [lambda x: 1.8/(1+clip_exp(-x))]+\
-                [lambda x: clip_exp(x)]
-    p_links  = [lambda x: np.log(x+eps_)]*3+\
-                [lambda x: np.log(x+eps_)-np.log(1.8-x+eps_)]+\
-                [lambda x: np.log(x+eps_)]
+    p_priors = [halfnorm(0, 50)]*len(p_names)
+    p_trans  = [lambda x: clip_exp(x)]*2 \
+                + [lambda x: 1.8/(1+clip_exp(-x))] \
+                + [lambda x: 1/(1+clip_exp(-x))] 
+    p_links  = [lambda x: np.log(x+eps_)]*2 \
+                + [lambda x: np.log(x+eps_)-np.log(1.8-x+eps_)] \
+                + [lambda x: np.log(x+eps_)-np.log(1-x+eps_)]
     n_params = len(p_names)
-    voi      = ['i_SZ']
+    voi      = ['i_SZ', 'lmbda', 'demand']
     insights = ['enc', 'dec', 'pol']
     color    = viz.Red
     marker   = '^'
@@ -479,27 +528,44 @@ class ECRL(ecPG):
 
     @staticmethod
     def link_params(params):
-        return [f(p) for f, p in zip(ECRL.p_links, params)]
+        return [f(p) for f, p in zip(ecRL0.p_links, params)]
+
+    @staticmethod
+    def trans_params(params):
+        return [f(p) for f, p in zip(ecRL0.p_trans, params)]
 
     def load_params(self, params):
         params = [f(p) for f, p in zip(self.p_trans, params)]
-        self.alpha_psi  = params[0]
-        self.alpha_rho  = params[1]
-        self.lmbda      = params[2]
-        self.C          = params[3]
-        self.alpha_w    = params[4]
-        self.b          = 1/self.nA
-        # initialize the w = .9, since
-        # w = 1/(1+exp(-xi)), 
-        # we have xi = log(.9) - log(.1)
-        self.xi         = np.log(.9)-np.log(.1) 
-        self.w          = 1/(1+clip_exp(-self.xi))
-        
+        self.alpha_psi = params[0]
+        self.alpha_rho = params[1]
+        self.C         = params[2]
+        self.lmbda     = params[3]
+        # initalize some variables
+        self.alpha_lmbda = 0
+        self.b = 1/self.nA
+        self.demand = 0
+    
+class ecRL_d(ecRL0):
+    '''Efficient Coding Reinforcement Learning with discounting
+    '''
+    
     def _learn_enc_dec(self):
+        '''Update the parameters of the encoder and decoder
+
+        To address the dual optimziation problem:
+
+            min_{λ} max_{θ, φ} E[r-b] - λ(I(S;Z)-C)
+
+        we use the following update rules:
+
+            θ = θ - α_psi * g_theta
+            φ = φ - α_rho * g_phi
+            λ = λ + α_lambda * (I(S;Z)-C)
+        '''
         # get data 
         s, a_ava, a, r = self.mem.sample('s', 'a_ava', 'a', 'r')
        
-        # prediction 
+        # Forward: prediction 
         f     = np.eye(self.nS)[s].reshape([1, -1])
         p_Z1s = softmax(f@self.theta, axis=1)
         m_A   = mask_fn(self.nA, a_ava)
@@ -507,56 +573,55 @@ class ECRL(ecPG):
         p_a1Z = p_A1Z[:, [a]]
         u = np.array([r - self.b])[:, np.newaxis] 
         
-        # backward
-        # note: in derviation we wrote 
-        #          log_dif = log p(Z|S) - log p(Z) - 1
-        # However, substracting the constant 1 will not affect the 
-        # numerical value of gradeint, due to the normalization 
-        # term in calculating gTheta.
+        # Backward: gradient calculation 
+        # calculate the gradient of theta 
         log_dif = np.log(p_Z1s+eps_)-np.log(self.p_Z.T+eps_)  
-        sTheta = (self.w*u*p_a1Z.T/(self.lmbda+eps_) - log_dif)
+        sTheta = (u*p_a1Z.T - self.lmbda*log_dif)
         gTheta = -f.T@(p_Z1s*(np.ones([1, self.nZ])*
                     sTheta - p_Z1s@sTheta.T))
-       
         # calculate the gradient of phi 
-        sPhi = self.w*u*p_Z1s.T
+        sPhi = u*p_Z1s.T
         gPhi = -p_a1Z*(np.eye(self.nA)[[a]] - p_A1Z)*sPhi
+        # calculate the gradient of tradeoff 
+        p_Z1S = softmax(self.theta, axis=1)
+        mi = MI(self.p_S, p_Z1S, self.p_Z)
+        self.demand = mi - self.C
 
-        # calculate the gradient of xi 
-        gXi = -((p_Z1s@p_a1Z).sum() - 1/self.nA)*(r - self.b)*self.w*(1-self.w)
+        # Update the parameters
+        alpha_psi = self.alpha_psi/(self.lmbda+eps_)
+        self.theta -= alpha_psi * np.clip(gTheta, -1, 1)
+        self.phi   -= self.alpha_rho * gPhi
+        self.lmbda += self.alpha_lmbda * self.demand
+        self.lmbda = np.max([self.lmbda, eps_])
+    
 
-        # update phi, the parameter of decoder 
-        self.theta -= self.alpha_psi * gTheta
-        self.phi   -= self.alpha_rho * gPhi 
-        self.xi    -= self.alpha_w * gXi
-
-        # update w, the weight for exploration 
-        self.w = 1/(1+clip_exp(-self.xi))
-
-class CURL(ECRL):
+class cuRL(ecRL):
+    '''Capacity Unlimited Reinforcement Learning
+    '''
     name     = 'CURL'
-    p_names  = ['alpha_rho', 'alpha_w']  
+    p_names  = ['alpha_rho']  
     p_bnds   = [(-1000, 1000)]*len(p_names)
-    p_pbnds  = [(-2, 3), (-3, 1)]
+    p_pbnds  = [(-2, 3)]
     p_poi    = p_names
-    p_priors = [halfnorm(0, 40)]*2
-    p_trans  = [lambda x: clip_exp(x)]*2
-    p_links  = [lambda x: np.log(x+eps_)]*2
+    p_priors = [halfnorm(0, 50)]
+    p_trans  = [lambda x: clip_exp(x)]
+    p_links  = [lambda x: np.log(x+eps_)]
     n_params = len(p_names)
     voi      = [] 
+    color    = viz.green2
+    marker   = '^'
+    size     = 125
+    alpha    = 1
 
     @staticmethod
     def link_params(params):
-        return [f(p) for f, p in zip(CURL.p_links, params)]
+        return [f(p) for f, p in zip(cuRL.p_links, params)]
 
     def load_params(self, params):
         params = [f(p) for f, p in zip(self.p_trans, params)]
         self.alpha_rho  = params[0]
-        self.alpha_w    = params[1]
         self.b          = 1/self.nA
-        self.xi         = np.log(.9)-np.log(.1) 
-        self.w          = 1/(1+clip_exp(-self.xi))
-
+      
     def _init_agent(self):
         self.nS = int(self.nS)
         self.nZ = self.nS
@@ -578,52 +643,40 @@ class CURL(ECRL):
         u = np.array([r - self.b])[:, np.newaxis] 
        
         # calculate the gradient of phi 
-        sPhi = self.w*u*p_Z1s.T
+        sPhi = u*p_Z1s.T
         gPhi = -p_a1Z*(np.eye(self.nA)[[a]] - p_A1Z)*sPhi
-
-        # calculate the gradient of xi 
-        gXi = -((p_Z1s@p_a1Z).sum() - 1/self.nA)*(r - self.b)*self.w*(1-self.w)
 
         # update phi, the parameter of decoder 
         self.phi   -= self.alpha_rho * gPhi 
-        self.xi    -= self.alpha_w * gXi
 
-        # update w, the weight for exploration 
-        self.w = 1/(1+clip_exp(-self.xi))
-
-class CCRL(ECRL):
-    '''Capacity-constrained RL'''
-    name     = 'CCRL'
-    p_names  = ['alpha_rho', 'alpha_w', 'C']  
+class clRL(ecRL):
+    '''Capacity Limited Reinforcement Learning
+    '''
+    name     = 'clRL'
+    p_names  = ['alpha_rho', 'C']
     p_bnds   = [(-1000, 1000)]*len(p_names)
-    p_pbnds  = [(-2, 3), (-3, 1), (-.22, .7)]
+    p_pbnds  = [(-2, 3), (0, 1)]
     p_poi    = p_names
-    p_priors = [halfnorm(0, 40)]*2+\
-                [uniform(0, 1.8)]
-    p_trans  = [lambda x: clip_exp(x)]*2+\
-                [lambda x: 1.8/(1+clip_exp(-x))]
-    p_links  = [lambda x: np.log(x+eps_)]*2+\
-                [lambda x: np.log(x+eps_)-np.log(1.8-x+eps_)]
+    p_priors = [halfnorm(0, 50)]*2
+    p_trans  = [lambda x: clip_exp(x), 
+                lambda x: 1.8/(1+clip_exp(-x))]
+    p_links  = [lambda x: np.log(x+eps_),
+                lambda x: np.log(x+eps_)-np.log(1.8-x+eps_)]
     n_params = len(p_names)
-    voi      = [] 
-
+    voi      = []
+    color    = viz.green3
+    
     @staticmethod
     def link_params(params):
-        return [f(p) for f, p in zip(CCRL.p_links, params)]
+        return [f(p) for f, p in zip(clRL.p_links, params)]
 
     def load_params(self, params):
         params = [f(p) for f, p in zip(self.p_trans, params)]
-        self.alpha_rho  = params[0]
-        self.C          = params[1]
-        self.alpha_w    = params[2]
-        self.b          = 1/self.nA
-        # initialize the w = .9, since
-        # w = 1/(1+exp(-xi)), 
-        # we have xi = log(.9) - log(.1)
-        self.xi         = np.log(.9)-np.log(.1) 
-        self.w          = 1/(1+clip_exp(-self.xi))
+        self.alpha_rho = params[0]
+        self.C         = params[1]
+        self.b         = 1/self.nA
 
-    def _learn_enc_dec(self): CURL._learn_enc_dec(self)
+    def _learn_enc_dec(self): cuRL._learn_enc_dec(self)
 
 # --------- RLWM as a baseline --------- #
 
@@ -633,8 +686,8 @@ class RLWM(base_agent):
     p_bnds   = [(-1000, 1000)]*len(p_names)
     p_pbnds  = [(1, 2), (-2, 2), (-2, 2), (1, 2), (-2, 2), (1, 2)]
     p_poi    = p_names
-    p_priors = [halfnorm(0, 40), uniform(0, 1), uniform(0, 1), 
-                halfnorm(0, 40), uniform(0, 1), halfnorm(0, 40)]
+    p_priors = [halfnorm(0, 50), uniform(0, 1), uniform(0, 1), 
+                halfnorm(0, 50), uniform(0, 1), halfnorm(0, 50)]
     p_trans  = [lambda x: clip_exp(x),
                 lambda x: 1/(1+clip_exp(-x)),
                 lambda x: 1/(1+clip_exp(-x)),
@@ -649,6 +702,10 @@ class RLWM(base_agent):
                 lambda x: np.log(x+eps_)]
     n_params = len(p_names)
     voi      = [] 
+    color    = viz.green4
+    marker   = 'o'
+    size     = 100
+    alpha    = 1
 
     @staticmethod
     def link_params(params):
