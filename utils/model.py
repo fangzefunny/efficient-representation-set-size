@@ -480,15 +480,15 @@ class ecRL(base_agent):
         gPhi = -p_a1Z*(np.eye(self.nA)[[a]] - p_A1Z)*sPhi
         # calculate the gradient of tradeoff 
         p_Z1S = softmax(self.theta, axis=1)
-        mi = MI(self.p_S, p_Z1S, self.p_Z)
-        self.demand = mi - self.C
+        self.mi = MI(self.p_S, p_Z1S, self.p_Z)
+        self.demand = self.mi - self.C
 
         # Update the parameters
         self.theta -= self.alpha_psi * np.clip(gTheta, -1, 1)
         self.phi   -= self.alpha_rho * gPhi
         self.lmbda += self.alpha_lmbda * self.demand
         self.lmbda = np.max([self.lmbda, eps_])
-    
+
     # --------- some predictions ----------- #
         
     def get_i_SZ(self):
@@ -564,6 +564,22 @@ class ecRL0(ecRL):
         self.alpha_lmbda = 0
         self.b = 1/self.nA
         self.demand = 0
+        self.mi = self.C
+
+class ecRLp(ecRL0):
+    '''Efficient Coding Reinforcement Learning with discounting
+    '''
+    def policy(self, **kwargs):
+        f = np.eye(self.nS)[kwargs['s']].reshape([1, -1])
+        p_Z1s = softmax(f@self.theta, axis=1)
+        m_A   = mask_fn(self.nA, kwargs['a_ava'])
+        p_A1Z = softmax(self.phi-(1-m_A)*max_, axis=1)
+        # renormalize to avoid numeric problem
+        pi = (p_Z1s@p_A1Z).reshape([-1])
+        exploit = pi / pi.sum()
+        # out of capacity penalty
+        w = np.min([1, self.C/(self.mi+eps_)])
+        return w*exploit + (1-w)/self.nA
     
 class ecRL_d(ecRL0):
     '''Efficient Coding Reinforcement Learning with discounting
