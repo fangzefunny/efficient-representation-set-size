@@ -24,11 +24,15 @@ class viz:
     Yellow  = np.array([220, 175, 106]) / 255
     lYellow2= np.array([166, 201, 222]) / 255
     lYellow = np.array([252, 246, 238]) / 255
-    Purple  = np.array([108,  92, 231]) / 255
+    Purple  = np.array([104,  61, 109]) / 255
     ocGreen = np.array([ 90, 196, 164]) / 255
     oGrey   = np.array([176, 166, 183]) / 255
     orange  = np.array([228, 149,  92]) / 255
     Palette = [Blue, Yellow, Red, ocGreen, Purple, orange]
+
+    # seaborn palette
+    sns_purple = sns.color_palette("ch:s=-.2,r=.6", as_cmap=True)
+    sns_blue   = sns.cubehelix_palette(start=.5, rot=-.5, as_cmap=True)
 
     # addiction block, 
     add_block = np.array([164, 221, 211]) / 255
@@ -36,9 +40,11 @@ class viz:
     add_palette = [add_block, add_inter]
 
     # pairs
-    green1  = np.array([131, 163, 136]) / 255
-    green2  = np.array([220, 224, 209]) / 255
-    greenPairs = [green1, green2]
+    green1  = np.array([ 81, 121, 112]) / 255
+    green2  = np.array([133, 168, 140]) / 255
+    green3  = np.array([201, 210, 197]) / 255
+    green4  = np.array([190, 176, 137]) / 255
+    greenPairs = [green1, green2, green3, green4]
 
     # palette for agents
     b1      = np.array([ 43, 126, 164]) / 255
@@ -110,7 +116,7 @@ class viz:
     @staticmethod
     def violin(ax, data, x, y, order, palette, orient='v',
         hue=None, hue_order=None, shade_alpha=.1,
-        scatter_size=7, scatter_alpha=1, scatter_lw=0, scatter_edge_color='w',
+        scatter_size=7, scatter_alpha=1, scatter_lw=0, scatter_edge_color='w', scatter_type='swarm',
         mean_marker_size=6, err_capsize=.11, 
         add_errs=True, errorbar='se', errorcolor=[.3]*3,
         errorlw=2):
@@ -124,7 +130,8 @@ class viz:
                             legend=False, alpha=shade_alpha, inner=None, density_norm='width',
                             ax=ax)
         plt.setp(v.collections, alpha=.5, edgecolor='none')
-        sns.stripplot(data=data, 
+        if scatter_type=='strip':
+            sns.stripplot(data=data, 
                             x=x, y=y, order=order, 
                             hue=g_var if hue is None else hue, 
                             hue_order=order if hue is None else hue_order, 
@@ -134,6 +141,18 @@ class viz:
                             dodge=False if hue is None else True,
                             legend=False, zorder=2,
                             ax=ax)
+        elif scatter_type=='swarm':
+            sns.swarmplot(data=data, 
+                            x=x, y=y, order=order, 
+                            orient=orient, 
+                            hue=g_var if hue is None else hue, 
+                            hue_order=order if hue is None else hue_order,
+                            palette=palette, 
+                            size=scatter_size, edgecolor=scatter_edge_color, 
+                            alpha=scatter_alpha,
+                            legend=False, zorder=2,
+                            ax=ax)
+        
         if add_errs:
             groupby = [g_var, hue] if hue is not None else [g_var]
             sns.barplot(data=data, 
