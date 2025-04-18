@@ -1,18 +1,19 @@
 import os 
+import argparse
 import pickle
 import numpy as np 
 import pandas as pd 
+
+## pass the hyperparams
+parser = argparse.ArgumentParser(description='Test for argparse')
+parser.add_argument('--data_set',   '-d', help='which_data', type=str, default='setsize-collins12')
+args = parser.parse_args()
 
 # set up path 
 path = os.path.dirname(os.path.abspath(__file__))
 if not os.path.exists( f'{path}/data'): os.makedirs( f'{path}/data')
 
 # utils
-def clean_data(data):
-    data = data.drop(columns = ['Unnamed: 0'])
-    data = data.drop(index = data[(data == -1).values].index.unique().values)
-    return data 
-
 def remake_cols(data):
     header = ['subject', 'block', 'setSize', 'trial', 'state', 'img', 
               'imgCat', 'iter', 'correctAct', 'action', 'keyNum', 
@@ -48,8 +49,7 @@ def split_data(data, mode = 'block'):
 def pre_process_12():
     
     # load data 
-    human_data = pd.read_csv('raw_data/collins_12_orig.csv')
-    human_data = clean_data( human_data)
+    human_data = pd.read_csv('raw_data/collins_12_orig.csv', index_col=0)
     human_data = remake_cols(human_data)
     # rename the columns 
     human_data.rename(
@@ -82,10 +82,27 @@ def pre_process_12():
         block_lst = sub_data['block_id'].unique()
         sub_data_for_fit = {}
         for block_id in block_lst:
+            accept = True
             block_data = sub_data.query(f'block_id=={block_id}').reset_index(drop=True)
             block_data = block_data.loc[ :, coi]
-            sub_data_for_fit[block_id] = block_data
-            for_analysis.append(block_data)
+            # preprocess the data with nan value 
+            n_nan = block_data.query('r==-1').shape[0]
+            if n_nan > 0:
+                thres = np.max([block_data.shape[0] * .1, 3])
+                accept = False if n_nan > thres else True
+                if accept:
+                    # fill the a==-2 with a random action from [0, 1, 2]
+                    nan_idx = block_data.query('r==-1').index
+                    block_data.loc[nan_idx, 'a'] = np.random.choice(3, size=n_nan)
+                    block_data.loc[block_data.query('r==-1').index, 'r'] = (
+                        block_data.query('r==-1')['a'] == 
+                        block_data.query('r==-1')['cor_a']
+                    ).astype(int)
+                else:
+                    print(f'{sub_id}, block-{int(block_id)} has {n_nan} nan values')
+            if accept:
+                sub_data_for_fit[block_id] = block_data
+                for_analysis.append(block_data)
         data_for_fit[sub_id] = sub_data_for_fit
     # save the for analysis data
     for_analysis = pd.concat(for_analysis)
@@ -97,8 +114,7 @@ def pre_process_12():
 def pre_process_14():
     
     # load data 
-    human_data = pd.read_csv( 'raw_data/collins_14_orig.csv')
-    human_data = clean_data( human_data)
+    human_data = pd.read_csv('raw_data/collins_14_orig.csv', index_col=0)
     human_data = remake_cols( human_data)
     human_data = human_data.reset_index(drop=True)
      # rename the columns 
@@ -136,10 +152,27 @@ def pre_process_14():
         block_lst = sub_data['block_id'].unique()
         sub_data_for_fit = {}
         for block_id in block_lst:
+            accept = True
             block_data = sub_data.query(f'block_id=={block_id}').reset_index(drop=True)
-            block_data = block_data.loc[:, coi]
-            sub_data_for_fit[block_id] = block_data
-            for_analysis.append(block_data)
+            block_data = block_data.loc[ :, coi]
+            # preprocess the data with nan value 
+            n_nan = block_data.query('r==-1').shape[0]
+            if n_nan > 0:
+                thres = np.max([block_data.shape[0] * .1, 3])
+                accept = False if n_nan > thres else True
+                if accept:
+                    # fill the a==-2 with a random action from [0, 1, 2]
+                    nan_idx = block_data.query('r==-1').index
+                    block_data.loc[nan_idx, 'a'] = np.random.choice(3, size=n_nan)
+                    block_data.loc[block_data.query('r==-1').index, 'r'] = (
+                        block_data.query('r==-1')['a'] == 
+                        block_data.query('r==-1')['cor_a']
+                    ).astype(int)
+                else:
+                    print(f'{sub_id}, block-{int(block_id)} has {n_nan} nan values')
+            if accept:
+                sub_data_for_fit[block_id] = block_data
+                for_analysis.append(block_data)
         data_for_fit[sub_id] = sub_data_for_fit
      # save the for analysis data
     for_analysis = pd.concat(for_analysis)
@@ -151,13 +184,14 @@ def pre_process_14():
 
 if __name__ == '__main__':
     
+    # set the random seed, used for nan-value filling
+    np.random.seed(2025)
+
     # preprocess collins 12 data 
-    pre_process_12()
+    if args.data_set == 'setsize-collins12':
+        pre_process_12()
 
     # preprocess collins 14 data 
-    pre_process_14()
+    if args.data_set == 'setsize-collins14':
+        pre_process_14()
     
-
-    
-
-      
