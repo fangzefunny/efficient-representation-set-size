@@ -24,6 +24,15 @@ class base_task:
 
     def instan(self, seed=1234, **kwargs):
         return NotImplementedError
+    
+    def termination(self, block_data, pred_data):
+        '''Termination condition for this task 
+
+        However, this is not always used. It often 
+        used when the task has adapative termination
+        condition. 
+        '''
+        return False
 
 # --------------------------- #
 #       Forgetting task       #
@@ -45,6 +54,63 @@ class setsize_task(base_task):
     
     def _init_S(self, block_type):
         self.nS = int(block_type)
+
+    def termination(self, block_data, pred_data):
+        '''Termination condition for this task 
+
+        The task terminates either:
+            (1) the number of trials reaches the 15 maximum repetitions
+            (2) reach 9 repetitions & four of the last five blocks are correct
+        '''
+        block_type = block_data['block_type'].unique()[0]
+        min_trials = block_type*9
+        max_trials = block_type*15
+        q1 = pred_data.dropna().__len__() >= max_trials
+        q2 = pred_data.dropna().__len__() >= min_trials
+        q3 = pred_data.dropna()['r'].values[-5:].mean() >= .8
+        return q1 or (q2 and q3)
+    
+    @staticmethod
+    def fill_trials(block_data, rng):
+        '''Fill the block_data to the maximum number of trials
+
+        This experiment forces to end when the repetition reaches 15.
+        '''
+        max_reptitions = 15
+        # get the current repetition in the block_data
+        current_reps = block_data['repetitions'].max()
+        current_trials = block_data['trial'].max()
+        fill_reps = max_reptitions - current_reps
+        # get the state space 
+        S = block_data['s'].unique().tolist()
+        # get the s-a mapping
+        s_cor_a_table = block_data.pivot_table(
+            index='s',
+            values='cor_a',
+            aggfunc='mean'
+        )
+        s_cor_a_map = {s: s_cor_a_table.loc[s].values[0] for s in s_cor_a_table.index}
+        # fill the block_data
+        fill_block_data = {'trial':[], 's':[], 'cor_a':[], 'repetitions':[]}
+        for rep in range(int(fill_reps)):
+            rng.shuffle(S)
+            cor_a_seq = [s_cor_a_map[s] for s in S]
+            # save the data
+            fill_block_data['s']+= S.copy()
+            fill_block_data['cor_a'] += cor_a_seq.copy()
+            fill_block_data['repetitions'] += [current_reps+rep+1]*len(S)
+            start_idx = int(current_trials+rep*len(S))
+            end_idx = int(start_idx+len(S))
+            fill_block_data['trial'] += list(range(start_idx+1, end_idx+1))
+        # fill the other information
+        cols = ['sub_id', 'block_id', 'a_ava', 'block_type', 'stage']
+        for c in cols:
+            fill_value = block_data[c].unique()
+            assert fill_value.__len__() == 1, f'{c} has multiple values'
+            fill_block_data[c] = fill_value[0]
+        fill_block_data = pd.DataFrame(fill_block_data)
+        filled_data = pd.concat([block_data, fill_block_data], axis=0)
+        return filled_data.reset_index(drop=True)
         
     @staticmethod
     def eval_fn(row, subj):

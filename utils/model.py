@@ -161,6 +161,11 @@ class wrapper:
             for v in self.agent.voi:
                 pred_data.loc[t, v] = eval(f'subj.get_{v}()')
 
+            # if register hook to get the model insights
+            if self.use_hook:
+                for k in self.insights.keys():
+                    self.insights[k].append(eval(f'subj.get_{k}()'))
+
             # simulate the data 
             ll = env.eval_fn(row, subj)
             
@@ -194,12 +199,19 @@ class wrapper:
         env  = self.env_fn(block_type)
         subj = self.agent(env, params)
 
+        # sometimes, the block_data is adaptive, so the given block_data
+        # from the subject is not the same as the block_data from the env
+        # first fill the block_data to the maximum number of trials
+        # then simulate the data until the termination condition is met
+        block_data = env.fill_trials(block_data, rng)
+
         ## init a blank dataframe to store variable of interest
         col = self.env_fn.voi + self.agent.voi
         init_mat = np.zeros([block_data.shape[0], len(col)]) + np.nan
         pred_data = pd.DataFrame(init_mat, columns=col)  
 
         ## loop to simulate the responses in the block
+        done = False
         for t, row in block_data.iterrows():
 
             # record some insights of the model
@@ -218,10 +230,18 @@ class wrapper:
             for i, v in enumerate(env.voi): 
                 pred_data.loc[t, v] = subj_voi[i]
 
+            # check if the termination condition is met
+            done = env.termination(block_data, pred_data)
+            if done: break
+
         # drop nan columns
         pred_data = pred_data.dropna(axis=1, how='all')
-            
-        return pd.concat([block_data, pred_data], axis=1)
+
+        # remove the redundant rows which is used for termination
+        # checking
+        comb_data = pd.concat([block_data, pred_data], axis=1)
+        comb_data = comb_data.dropna(axis=0)
+        return comb_data
     
     def register_hooks(self, *args):
         self.use_hook = True 
