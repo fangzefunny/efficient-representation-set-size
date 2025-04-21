@@ -199,11 +199,11 @@ class wrapper:
         env  = self.env_fn(block_type)
         subj = self.agent(env, params)
 
-        # sometimes, the block_data is adaptive, so the given block_data
-        # from the subject is not the same as the block_data from the env
-        # first fill the block_data to the maximum number of trials
-        # then simulate the data until the termination condition is met
-        block_data = env.fill_trials(block_data, rng)
+        # # sometimes, the block_data is adaptive, so the given block_data
+        # # from the subject is not the same as the block_data from the env
+        # # first fill the block_data to the maximum number of trials
+        # # then simulate the data until the termination condition is met
+        # block_data = env.fill_trials(block_data, rng)
 
         ## init a blank dataframe to store variable of interest
         col = self.env_fn.voi + self.agent.voi
@@ -230,9 +230,9 @@ class wrapper:
             for i, v in enumerate(env.voi): 
                 pred_data.loc[t, v] = subj_voi[i]
 
-            # check if the termination condition is met
-            done = env.termination(block_data, pred_data)
-            if done: break
+            # # check if the termination condition is met
+            # done = env.termination(block_data, pred_data)
+            # if done: break
 
         # drop nan columns
         pred_data = pred_data.dropna(axis=1, how='all')
@@ -566,7 +566,91 @@ class ecRL0(ecRL):
         self.demand = 0
         self.mi = self.C
 
-class ecRLp(ecRL0):
+class ecRL0_m(ecRL0):
+    '''Efficient Coding Reinforcement Learning with discounting
+    '''
+    p_names  = ['alpha_psi', 'alpha_rho', 'capacity', 'lmbda0', 'gamma']  
+    p_bnds   = [(-1000, 1000)]*len(p_names)
+    p_pbnds  = [(-2, 3),       # alpha_psi ∈ (0.13, 20.39) 
+                ( 1, 3),       # alpha_rho ∈ (2.72, 20.09)
+                ( 0, 1),       # capacity  ∈ (0.90,  1.32)
+                (-4.6, -1.4),  # lmbda0    ∈ (0.01,  0.20)
+                (-.8, .8)]     # gamma     ∈ (0.3,   0.7)
+    p_poi    = p_names
+    p_priors = [halfnorm(0, 50)]*len(p_names)
+    p_trans  = [lambda x: clip_exp(x)]*2 \
+                + [lambda x: 1.8/(1+clip_exp(-x))] \
+                + [lambda x: 1/(1+clip_exp(-x))]*2 
+    p_links  = [lambda x: np.log(x+eps_)]*2 \
+                + [lambda x: np.log(x+eps_)-np.log(1.8-x+eps_)] \
+                + [lambda x: np.log(x+eps_)-np.log(1-x+eps_)]*2
+    n_params = len(p_names)
+    voi      = ['i_SZ', 'lmbda', 'demand']
+    insights = ['enc', 'dec', 'pol']
+    color    = viz.Red
+    marker   = '^'
+    size     = 125
+    alpha    = 1
+    
+    def load_params(self, params):
+        params = [f(p) for f, p in zip(self.p_trans, params)]
+        self.alpha_psi = params[0]
+        self.alpha_rho = params[1]
+        self.C         = params[2]
+        self.lmbda     = params[3]
+        self.gamma0    = params[4]
+        # initalize some variables
+        self.alpha_lmbda = 0
+        self.b = 1/self.nA
+        self.demand = 0
+        self.mi = self.C
+        self.v  = 0 
+        self.gamma = self.gamma0 
+
+    def _learn_enc_dec(self):
+        '''Update the parameters of the encoder and decoder
+
+        To address the dual optimziation problem:
+
+            min_{λ} max_{θ, φ} E[r-b] - λ(I(S;Z)-C)
+
+        we use the following update rules:
+
+            θ = θ - α_psi * g_theta
+            φ = φ - α_rho * g_phi
+            λ = λ + α_lambda * (I(S;Z)-C)
+        '''
+        # get data 
+        s, a_ava, a, r = self.mem.sample('s', 'a_ava', 'a', 'r')
+       
+        # Forward: prediction 
+        f     = np.eye(self.nS)[s].reshape([1, -1])
+        p_Z1s = softmax(f@self.theta, axis=1)
+        m_A   = mask_fn(self.nA, a_ava)
+        p_A1Z = softmax(self.phi-(1-m_A)*max_, axis=1)
+        p_a1Z = p_A1Z[:, [a]]
+        u = np.array([r - self.b])[:, np.newaxis] 
+        
+        # Backward: gradient calculation 
+        # calculate the gradient of theta 
+        log_dif = np.log(p_Z1s+eps_)-np.log(self.p_Z.T+eps_)  
+        sTheta = (u*p_a1Z.T - self.lmbda*log_dif)
+        gTheta = -f.T@(p_Z1s*(np.ones([1, self.nZ])*
+                    sTheta - p_Z1s@sTheta.T))
+        # calculate the gradient of phi 
+        sPhi = u*p_Z1s.T
+        gPhi = -p_a1Z*(np.eye(self.nA)[[a]] - p_A1Z)*sPhi
+        # calculate the gradient of tradeoff 
+        p_Z1S = softmax(self.theta, axis=1)
+        self.mi = MI(self.p_S, p_Z1S, self.p_Z)
+        self.demand = self.mi - self.C
+
+        # Update the parameters
+        self.v = self.gamma*self.v + (1-self.gamma)*self.alpha_psi*np.clip(gTheta, -1, 1)
+        self.theta -= self.alpha_psi * self.v
+        self.phi   -= self.alpha_rho * gPhi
+
+class ecRLw(ecRL0):
     '''Efficient Coding Reinforcement Learning with discounting
     '''
     def policy(self, **kwargs):
