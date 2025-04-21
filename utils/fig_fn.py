@@ -36,7 +36,7 @@ def get_asymptote_acc(data):
     return sel_data
 
 def two_behavioral_patterns(data, axs, mode='human', palette=viz.sns_purple,
-                            optimal_curve=True):
+                            optimal_curve=True,):
     data = data.copy()
     if mode!='human': data['r'] = data['acc']
     sel_data = get_asymptote_acc(data)    # the set size effect
