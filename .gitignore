@@ -22,4 +22,5 @@ torchntk/
 mri_src/
 hpclog/
 hpc_run.sh
+raw_data/
 *.log
