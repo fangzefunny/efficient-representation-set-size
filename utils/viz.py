@@ -31,8 +31,8 @@ class viz:
     Palette = [Blue, Yellow, Red, ocGreen, Purple, orange]
 
     # seaborn palette
-    sns_purple = sns.color_palette("ch:s=-.2,r=.6", as_cmap=True)
-    sns_blue   = sns.cubehelix_palette(start=.5, rot=-.5, as_cmap=True)
+    sns_purple = sns.color_palette("ch:s=-.2,r=.6", n_colors=6)
+    sns_blue   = sns.cubehelix_palette(start=.5, rot=-.5, n_colors=6)
 
     # addiction block, 
     add_block = np.array([164, 221, 211]) / 255
